@@ -22,6 +22,56 @@ sequelize.sync({ force: false }).then(() => {
   });
 });
 
+function addStock(client, msg) {
+  const trackingObject = parseTracking(msg);
+
+  if (trackingObject.error) {
+    client.channels.cache
+      .get(trackingObject.channel_id)
+      .send(trackingObject.message);
+    return;
+  }
+  Tracking.addTracking(trackingObject)
+    .then((result) => {
+      const { dataValues } = result;
+      client.channels.cache
+        .get(trackingObject.channel_id)
+        .send(
+          `${dataValues.stock_ticker} is being tracked for $${dataValues.target_price}`
+        );
+    })
+    .catch((error) => {
+      client.channels.cache
+        .get(trackingObject.channel_id)
+        .send(`Error adding tracking`);
+      console.error(error);
+      Sentry.captureException(error);
+    });
+}
+
+async function listTracking(client, msg) {
+  const channel_id = msg.channel.id;
+  const allTrackings = await Tracking.getTrackingById(channel_id);
+
+  // inside a command, event listener, etc.
+  const exampleEmbed = new Discord.MessageEmbed()
+    .setColor("#0099ff")
+    .setTitle("Stonks Tracker")
+    .setDescription("Stocks currently being tracked")
+    .setThumbnail("https://i.imgur.com/EFqRbev.png")
+    .setTimestamp();
+
+  allTrackings.forEach((tracking) => {
+    console.log(tracking.dataValues);
+    exampleEmbed.addFields({
+      name: `${tracking.dataValues.username} - ${tracking.dataValues.stock_ticker}`,
+      value: `$${tracking.dataValues.target_price}`
+    });
+  });
+
+  client.channels.cache.get(channel_id).send(exampleEmbed);
+}
+
 function parseTracking(msg) {
   const splitMessage = msg.content.split(" ");
 
@@ -101,34 +151,23 @@ async function getPrices() {
 
 client.on("message", (msg) => {
   //Only listen for commands that start with !
-  if (msg.content.substring(0, 6) !== "!track") {
+  if (msg.content.substring(0, 1) !== "!") {
     return;
   }
 
-  const trackingObject = parseTracking(msg);
+  const command = msg.content.split(" ")[0].trim();
 
-  if (trackingObject.error) {
-    client.channels.cache
-      .get(trackingObject.channel_id)
-      .send(trackingObject.message);
-    return;
+  switch (command) {
+    case "!track":
+      addStock(client, msg);
+      break;
+    case "!tracking":
+      listTracking(client, msg);
+      break;
+    default:
+      break;
   }
-  Tracking.addTracking(trackingObject)
-    .then((result) => {
-      const { dataValues } = result;
-      client.channels.cache
-        .get(trackingObject.channel_id)
-        .send(
-          `${dataValues.stock_ticker} is being tracked for $${dataValues.target_price}`
-        );
-    })
-    .catch((error) => {
-      client.channels.cache
-        .get(trackingObject.channel_id)
-        .send(`Error adding tracking`);
-      console.error(error);
-      Sentry.captureException(error);
-    });
+  console.log(command);
 });
 
 client.login(process.env.DISCORD_TOKEN);

@@ -13,6 +13,22 @@ module.exports = {
         });
     });
   },
+  getTrackingById(channel_id) {
+    return new Promise((resolve, reject) => {
+      tracking
+        .findAll({
+          where: {
+            channel_id,
+          },
+        })
+        .then((result) => {
+          resolve(result);
+        })
+        .catch((error) => {
+          reject(error);
+        });
+    });
+  },
   addTracking(trackingObject) {
     return new Promise((resolve, reject) => {
       tracking
