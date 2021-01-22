@@ -7,23 +7,31 @@ const client = new Discord.Client();
 const Tracking = require("./controllers/TrackingController");
 const Stocks = require("./controllers/StocksController");
 
-Sentry.init({
-  dsn:
-    "https://b50315bf358b47338560dc9293c64efb@o507739.ingest.sentry.io/5599265",
+let lastCheckTime;
 
-  // We recommend adjusting this value in production, or using tracesSampler
-  // for finer control
-  tracesSampleRate: 1.0,
-});
+if (process.env.ENV !== "development") {
+  Sentry.init({
+    dsn:
+      "https://b50315bf358b47338560dc9293c64efb@o507739.ingest.sentry.io/5599265",
 
+    // We recommend adjusting this value in production, or using tracesSampler
+    // for finer control
+    tracesSampleRate: 1.0,
+  });
+}
 sequelize.sync({ force: false }).then(() => {
   client.on("ready", () => {
     console.log(`Logged in as ${client.user.tag}!`);
   });
 });
 
-function addStock(client, msg) {
-  const trackingObject = parseTracking(msg);
+function updateLastCheckTime() {
+  lastCheckTime = new Date().toLocaleTimeString();
+  console.log(lastCheckTime);
+}
+
+async function addStock(client, msg) {
+  let trackingObject = parseTracking(msg);
 
   if (trackingObject.error) {
     client.channels.cache
@@ -31,45 +39,72 @@ function addStock(client, msg) {
       .send(trackingObject.message);
     return;
   }
-  Tracking.addTracking(trackingObject)
-    .then((result) => {
-      const { dataValues } = result;
-      client.channels.cache
-        .get(trackingObject.channel_id)
-        .send(
-          `${dataValues.stock_ticker} is being tracked for $${dataValues.target_price}`
-        );
-    })
-    .catch((error) => {
-      client.channels.cache
-        .get(trackingObject.channel_id)
-        .send(`Error adding tracking`);
-      console.error(error);
-      Sentry.captureException(error);
-    });
+
+  try {
+    //Check current price of stock vs users target price, if current price is lower then target price, track for decrease
+    const currentPrice = await Stocks.checkStockPrice(
+      trackingObject.stock_ticker
+    );
+
+    console.log(currentPrice);
+
+    //Current price is higher, so we're tracking for an increase. otherwise track for a descrease
+    if (
+      Math.round(currentPrice.c * 100) <
+      Math.round(trackingObject.target_price * 100)
+    ) {
+      trackingObject.direction = "increase";
+    } else {
+      trackingObject.direction = "decrease";
+    }
+
+    const addTracking = await Tracking.addTracking(trackingObject);
+
+    client.channels.cache
+      .get(trackingObject.channel_id)
+      .send(
+        `${addTracking.stock_ticker} is being tracked for $${addTracking.target_price}`
+      );
+  } catch (error) {
+    client.channels.cache
+      .get(trackingObject.channel_id)
+      .send(`Error adding tracking`);
+    console.error(error);
+    Sentry.captureException(error);
+  }
 }
 
 async function listTracking(client, msg) {
-  const channel_id = msg.channel.id;
-  const allTrackings = await Tracking.getTrackingById(channel_id);
+  try {
+    const channel_id = msg.channel.id;
+    const allTrackings = await Tracking.getTrackingById(channel_id);
 
-  // inside a command, event listener, etc.
-  const exampleEmbed = new Discord.MessageEmbed()
-    .setColor("#0099ff")
-    .setTitle("Stonks Tracker")
-    .setDescription("Stocks currently being tracked")
-    .setThumbnail("https://i.imgur.com/EFqRbev.png")
-    .setTimestamp();
+    // inside a command, event listener, etc.
+    const exampleEmbed = new Discord.MessageEmbed()
+      .setColor("#0099ff")
+      .setTitle("Stonks Tracker")
+      .setDescription("Stocks currently being tracked")
+      .setThumbnail("https://i.imgur.com/EFqRbev.png")
+      .setFooter(`Last time checked ${lastCheckTime}`);
 
-  allTrackings.forEach((tracking) => {
-    console.log(tracking.dataValues);
-    exampleEmbed.addFields({
-      name: `${tracking.dataValues.username} - ${tracking.dataValues.stock_ticker}`,
-      value: `$${tracking.dataValues.target_price}`
+    allTrackings.forEach((tracking) => {
+      let direction;
+      if (tracking.direction == "increase") {
+        direction = ":arrow_up_small:";
+      } else {
+        direction = ":arrow_down_small:";
+      }
+      exampleEmbed.addFields({
+        name: `${tracking.dataValues.username} - ${tracking.dataValues.stock_ticker}`,
+        value: `$${tracking.dataValues.target_price} ${direction} `,
+      });
     });
-  });
 
-  client.channels.cache.get(channel_id).send(exampleEmbed);
+    client.channels.cache.get(channel_id).send(exampleEmbed);
+  } catch (error) {
+    console.error(error);
+    Sentry.captureException(error);
+  }
 }
 
 function parseTracking(msg) {
@@ -120,32 +155,49 @@ async function getPrices() {
       //Check price for each stock
       Stocks.checkStockPrice(stock.dataValues.stock_ticker)
         .then((result) => {
-          console.log(result, stock.dataValues.stock_ticker);
-          //If current price is 0, remove invalid stock ticker
-          if (result.c == 0) {
-            Tracking.removeTracking(stock.id);
-            return;
-          }
-          //if current price is higher then target price
-          if (
-            Math.round(result.c * 100) > Math.round(stock.target_price * 100)
-          ) {
-            //Send message to channel with prices
-            const message = `:moneybag::moneybag::moneybag::moneybag:\n${stock.stock_ticker}($${result.c}) has reached your target price of $${stock.target_price}\n:moneybag::moneybag::moneybag::moneybag: `;
-            //Send message to channel_id
-            client.channels.cache.get(stock.channel_id).send(message);
-            //Remove from tracking
-            Tracking.removeTracking(stock.id);
-          }
+          comparePrices(result, stock.dataValues);
         })
         .catch((error) => {
           console.error(error);
           Sentry.captureException(error);
         });
     });
+
+    //Update last time checked
+    updateLastCheckTime();
   } catch (error) {
     console.error(error);
     Sentry.captureException(error);
+  }
+}
+
+function comparePrices(result, stock) {
+  //If current price is 0, remove invalid stock ticker
+  if (result.c == 0) {
+    Tracking.removeTracking(stock.id);
+    return;
+  }
+  //Determine either tracking is looking for increase or decrease
+  if (result.direction == "increase") {
+    //if current price is higher then target price
+    if (Math.round(result.c * 100) > Math.round(stock.target_price * 100)) {
+      //Send message to channel with prices
+      const message = `:moneybag::moneybag::moneybag::moneybag:\n${stock.stock_ticker}($${result.c}) has reached your target price of $${stock.target_price}\n:moneybag::moneybag::moneybag::moneybag: `;
+      //Send message to channel_id
+      client.channels.cache.get(stock.channel_id).send(message);
+      //Remove from tracking
+      Tracking.removeTracking(stock.id);
+    }
+  } else {
+    //if current price is lower then target price
+    if (Math.round(result.c * 100) < Math.round(stock.target_price * 100)) {
+      //Send message to channel with prices
+      const message = `:moneybag::moneybag::moneybag::moneybag:\n${stock.stock_ticker}($${result.c}) has fallen below your target price of $${stock.target_price}\n:moneybag::moneybag::moneybag::moneybag: `;
+      //Send message to channel_id
+      client.channels.cache.get(stock.channel_id).send(message);
+      //Remove from tracking
+      Tracking.removeTracking(stock.id);
+    }
   }
 }
 
@@ -167,11 +219,10 @@ client.on("message", (msg) => {
     default:
       break;
   }
-  console.log(command);
 });
 
 client.login(process.env.DISCORD_TOKEN);
 
-const TEN_MINUTES = 600000;
+const TEN_MINUTES = 600000; //600000 = ten minutes
 
 setInterval(getPrices, TEN_MINUTES);

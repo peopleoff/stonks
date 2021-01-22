@@ -20,6 +20,10 @@ module.exports = function (sequelize, DataTypes) {
         type: DataTypes.DECIMAL(10, 2),
         allowNull: false,
       },
+      direction: {
+        type: DataTypes.STRING(50),
+        allowNull: false,
+      },
       username: {
         type: DataTypes.STRING(250),
         allowNull: false,
