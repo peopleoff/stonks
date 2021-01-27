@@ -27,7 +27,6 @@ sequelize.sync({ force: false }).then(() => {
 
 function updateLastCheckTime() {
   lastCheckTime = new Date().toLocaleTimeString();
-  console.log(lastCheckTime);
 }
 
 async function addStock(client, msg) {
@@ -45,8 +44,6 @@ async function addStock(client, msg) {
     const currentPrice = await Stocks.checkStockPrice(
       trackingObject.stock_ticker
     );
-
-    console.log(currentPrice);
 
     //Current price is higher, so we're tracking for an increase. otherwise track for a descrease
     if (
@@ -90,9 +87,9 @@ async function listTracking(client, msg) {
     allTrackings.forEach((tracking) => {
       let direction;
       if (tracking.direction == "increase") {
-        direction = ":arrow_up_small:";
+        direction = ":rocket:";
       } else {
-        direction = ":arrow_down_small:";
+        direction = ":coffin:";
       }
       exampleEmbed.addFields({
         name: `${tracking.dataValues.username} - ${tracking.dataValues.stock_ticker}`,
@@ -178,7 +175,7 @@ function comparePrices(result, stock) {
     return;
   }
   //Determine either tracking is looking for increase or decrease
-  if (result.direction == "increase") {
+  if (stock.direction == "increase") {
     //if current price is higher then target price
     if (Math.round(result.c * 100) > Math.round(stock.target_price * 100)) {
       //Send message to channel with prices
@@ -223,6 +220,4 @@ client.on("message", (msg) => {
 
 client.login(process.env.DISCORD_TOKEN);
 
-const TEN_MINUTES = 600000; //600000 = ten minutes
-
-setInterval(getPrices, TEN_MINUTES);
+setInterval(getPrices, process.env.TRACKING_MS);
